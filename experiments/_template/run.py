@@ -8,6 +8,7 @@ Run it from the repository folder, naming a configuration in configs/:
 
 Where the results go (chosen by the helper):
     tables       experiments/<name>/output/base/*.csv    ex.save_table(...)
+                 and the same table in Markdown (*.md), ready to copy into a log entry
     other files  experiments/<name>/output/base/...      ex.path("file.npz")
     figures      log/figs/<name>-base.png                 ex.save_figure(...)
 These are working files, not committed. A figure becomes part of the record
@@ -45,7 +46,8 @@ def main():
         rows.append({"n": n, "mean": x.mean(), "se": x.std(ddof=1) / np.sqrt(n)})
 
     # ------------------------------------------------------------ results
-    # A table: written to output/<config>/estimates.csv and printed as Markdown for the log.
+    # A table: written to output/<config>/estimates.csv, and as a Markdown table ready
+    # for the log to output/<config>/estimates.md (also printed on screen).
     ex.save_table(rows, "estimates", fmt={"mean": "{:.4f}", "se": "{:.4f}"})
 
     # A figure: written to log/figs/<name>-<config>.png, ready to embed in a log entry.

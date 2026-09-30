@@ -8,7 +8,8 @@ experiments/lsm_basis/
   run.py                 the code, shared by all parameter sets
   configs/base.yaml      one parameter set, including the random seed
   configs/hard.yaml      another one
-  output/base/           working results of "run.py base" (not committed)
+  output/base/           working results of "run.py base" (not committed):
+                         tables as .csv, and as .md ready to copy into the log
   imported/              results obtained elsewhere, copied in (committed)
 ```
 

@@ -207,10 +207,26 @@ class Entry:
         return re.sub(r"<!--.*?-->", "", body, flags=re.S).strip()
 
 
-def entries(log_dir: Path = LOG) -> list:
+def added_times(ref: str = "HEAD") -> dict:
+    """{entry file name: time (seconds) of the commit that added it}."""
+    out, t = {}, None
+    r = subprocess.run(["git", "log", ref, "--reverse", "--diff-filter=A", "--format=@%at",
+                        "--name-only", "--", "log/"], cwd=ROOT, capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        if line.startswith("@"):
+            t = int(line[1:])
+        elif line.strip() and t is not None:
+            out.setdefault(Path(line.strip()).name, t)
+    return out
+
+
+def entries(log_dir: Path = LOG, ref: str = "HEAD") -> list:
+    """Entries in chronological order: by date, then by when they were first
+    committed (entries not committed yet come last), then by name."""
     out = [Entry(p) for p in sorted(log_dir.glob("*.md"))
            if p.name.lower() != "readme.md" and not p.name.startswith("_")]
-    return sorted(out, key=lambda e: (e.date, e.name))
+    added = added_times(ref) if (ROOT / ".git").exists() else {}
+    return sorted(out, key=lambda e: (e.date, added.get(e.name, float("inf")), e.name))
 
 
 # ----------------------------------------------------------------- new
@@ -439,17 +455,29 @@ def png_text(path: Path) -> dict:
 
 
 def cmd_figinfo(a):
-    """Provenance of the figures of an entry (or of given image files)."""
+    """Provenance of the figures of an entry (or of given image files).
+    An entry can be given by its file name or any part of it, e.g. 'antithetic'."""
     files = []
     for x in a.items:
         p = Path(x)
-        if not p.is_absolute():
-            p = (Path.cwd() / p) if (Path.cwd() / p).exists() else (LOG / p)
-        if p.suffix == ".md" or (LOG / f"{x}.md").exists():
-            e = p if p.suffix == ".md" else LOG / f"{x}.md"
-            files += [(e.parent / t).resolve() for t in figure_links(e.read_text(encoding="utf-8"))]
-        else:
-            files.append(p)
+        cand = [p if p.is_absolute() else Path.cwd() / p, ROOT / p]
+        image = next((c for c in cand if c.is_file() and c.suffix.lower() != ".md"), None)
+        if image:
+            files.append(image.resolve())
+            continue
+        stem = Path(x).name[:-3] if x.endswith(".md") else Path(x).name
+        es = [e for e in entries()]
+        hits = [e for e in es if e.path.stem == stem] or [e for e in es if stem in e.path.stem]
+        if not hits:
+            sys.exit(f"No entry or image file matches '{x}'. Entries:\n    " +
+                     "\n    ".join(e.path.stem for e in es))
+        if len(hits) > 1:
+            sys.exit(f"'{x}' matches several entries; be more specific:\n    " +
+                     "\n    ".join(e.path.stem for e in hits))
+        e = hits[0]
+        links = figure_links(e.text)
+        print(f"{e.path.stem}: {len(links)} figure(s)")
+        files += [(e.path.parent / t).resolve() for t in links]
     for f in files:
         try:
             rel = f.relative_to(ROOT.resolve()).as_posix()
@@ -457,8 +485,11 @@ def cmd_figinfo(a):
             rel = f
         info = png_text(f) if f.exists() and f.suffix.lower() == ".png" else {}
         prov = info.get("Comment") or info.get("Description")
+        if not f.exists():
+            prov = "(file not found)"
         print(f"{rel}\n    " + (prov.replace("\n", "\n    ") if prov else
-                                 "(no provenance: not written by the experiment helper)"))
+                                 "(no provenance recorded: this figure was not saved by the experiment "
+                                 "helper's ex.save_figure)"))
 
 
 # ----------------------------------------------------------------- experiment
@@ -762,6 +793,33 @@ def cmd_index(a=None, quiet=False, exclude=()):
 
 
 # ----------------------------------------------------------------- check
+def maths_problems(text):
+    """Inline formulas $...$ that pandoc (PDF export) and GitHub do not recognise."""
+    out = []
+    body = re.sub(r"```.*?```|<!--.*?-->", lambda m: " " * len(m.group(0)), text, flags=re.S)
+    body = re.sub(r"\$`[^`\n]*`\$", lambda m: " " * len(m.group(0)), body)    # GitHub's $`...`$
+    body = re.sub(r"`[^`\n]*`", lambda m: " " * len(m.group(0)), body)
+    body = re.sub(r"\$\$.*?\$\$", lambda m: re.sub(r"[^\n]", " ", m.group(0)), body, flags=re.S)
+    for para in re.split(r"\n\s*\n", body):
+        pos = [m.start() for m in re.finditer(r"(?<!\\)\$", para)]
+        for a, b in zip(pos[0::2], pos[1::2]):
+            f = para[a:b + 1]
+            short = " ".join(f.split())[:40]
+            if "\n" in f:
+                out.append(f"formula {short} is broken over two lines: keep $...$ on one line")
+            elif f[1:2].isspace():
+                out.append(f"formula {short}: no space directly after the opening $")
+            elif f[-2:-1].isspace():
+                out.append(f"formula {short}: no space directly before the closing $")
+            elif para[b + 1:b + 2].isdigit():
+                out.append(f"formula {short}: a digit directly after the closing $ "
+                           "(add a space, or put the digit inside the formula)")
+        if len(pos) % 2:
+            tail = " ".join(para[pos[-1]:pos[-1] + 30].split())
+            out.append(f"unmatched $ near '{tail}' (write \\$ for a dollar sign)")
+    return out
+
+
 def check_entry(e: Entry, project: dict, pending=False, figures=True):
     """pending: entry not yet committed (save will freeze its figures);
     figures=False: skip figure links (save has already reported them)."""
@@ -814,6 +872,8 @@ def check_entry(e: Entry, project: dict, pending=False, figures=True):
     body = re.sub(r"`[^`\n]*`", "", body)
     if body.count("$$") % 2:
         errors.append("unbalanced $$ (display maths)")
+    for m in maths_problems(e.text):
+        warnings.append(m + " -- it will show as raw text on GitHub and break the PDF export")
     frozen = frozen_dir(e.path).resolve()
     for target in (figure_links(e.text) if figures else []):
         if re.match(r"[a-z]+://", target) or outside_repo(target, e.path):
@@ -907,11 +967,120 @@ def pdf_tweaks(text):
     return "".join(parts)
 
 
+def latex_error(output):
+    """The '! ...' error message and the 'l.<n>' line from LaTeX output: (message, n or None)."""
+    lines = output.splitlines()
+    i = next((k for k, ln in enumerate(lines) if ln.startswith("!")), None)
+    if i is None:
+        return "\n".join(lines[-15:]), None
+    msg = []
+    for ln in lines[i:i + 20]:
+        msg.append(ln)
+        m = re.match(r"l\.(\d+)", ln)
+        if m:
+            return "\n".join(msg), int(m.group(1))
+    return "\n".join(msg[:3]), None
+
+
+def locate_failure(tex_file, line_no, es):
+    """Name the entry containing line line_no of the exported .tex file."""
+    lines = tex_file.read_text(encoding="utf-8").splitlines()
+    if not line_no or line_no > len(lines):
+        return ""
+    entry = next((ln.split()[-1] for ln in reversed(lines[:line_no]) if "LOGTOOL-ENTRY" in ln), None)
+    if not entry:
+        return ""
+    msg = f"\nThe problem is in log/{entry}, near:\n    {lines[line_no - 1].strip()[:100]}\n"
+    e = next((x for x in es if x.name == entry), None)
+    hints = maths_problems(e.text) if e else []
+    if hints:
+        msg += "Likely cause:\n    " + "\n    ".join(hints) + "\n"
+    return msg + "Fix the entry (see the student manual, 'Maths, tables and figures') and export again."
+
+
+def copy_images(md, logdir, texdir):
+    """Copy the images embedded in md into texdir, so that the .tex file compiles on its own.
+    Images inside log/ keep their relative path (figs/<entry>/...); others go to media/."""
+    def fix(m):
+        link = m.group(2)
+        if re.match(r"[a-zA-Z]+://", link):
+            return m.group(0)
+        src = (logdir / link).resolve()
+        if not src.is_file():
+            return m.group(0)
+        try:
+            rel = src.relative_to(logdir.resolve()).as_posix()
+        except ValueError:
+            rel = f"media/{src.name}"
+        dest = texdir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        return m.group(1) + rel + m.group(3)
+    return _outside_protected(md, lambda s: IMG_LINK_RE.sub(fix, s))
+
+
+def shown(p):
+    """Path relative to the current folder if possible (for messages)."""
+    try:
+        return p.relative_to(Path.cwd()).as_posix()
+    except ValueError:
+        return str(p)
+
+
+def build_pdf(md, logdir, out, es):
+    """Write the LaTeX source <out>_tex/<out>.tex (with the figures it needs), compile it to out."""
+    eng = next((x for x in ("xelatex", "lualatex", "pdflatex") if shutil.which(x)), None)
+    if not eng:
+        sys.exit("no LaTeX engine found: use --format html instead")
+    texdir = out.parent / f"{out.stem}_tex"
+    if texdir.exists():
+        shutil.rmtree(texdir)
+    texdir.mkdir(parents=True)
+    src = texdir / "combined.md"
+    src.write_text(copy_images(md, logdir, texdir), encoding="utf-8")
+    tex = texdir / f"{out.stem}.tex"
+    opts = ["-s", "--toc", "--toc-depth=1", "-f", "markdown-implicit_figures",
+            "-V", "geometry:margin=2.2cm", "-V", "header-includes=\\usepackage{xurl}",
+            "-V", "colorlinks=true", "-V", "fontsize=11pt"]
+
+    def compile_(extra):
+        r = subprocess.run(["pandoc", src.name, "-o", tex.name] + opts + extra,
+                           cwd=texdir, capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit("pandoc failed:\n" + r.stderr)
+        for _ in range(3):      # LaTeX needs repeated runs for the table of contents
+            r = subprocess.run([eng, "-interaction=nonstopmode", "-halt-on-error", tex.name],
+                               cwd=texdir, capture_output=True, text=True, errors="replace")
+            if r.returncode != 0 or not re.search(r"Rerun to get|Label\(s\) may have changed", r.stdout):
+                return r
+        return r
+
+    r = compile_([])
+    if r.returncode != 0 and "lmodern.sty" in r.stdout and eng != "pdflatex":
+        # TeX installation without the lmodern package: use the OpenType fonts
+        r = compile_(["-V", "fontfamily=fontspec", "-V", "mainfont=Latin Modern Roman",
+                      "-V", "mathfont=Latin Modern Math"])
+    src.unlink()
+    where = shown(texdir)
+    if r.returncode != 0:
+        err, line_no = latex_error(r.stdout)
+        sys.exit(f"LaTeX ({eng}) failed on {where}/{tex.name}:\n{err}\n"
+                 + locate_failure(tex, line_no, es)
+                 + f"\n(Full LaTeX log: {where}/{tex.stem}.log)")
+    shutil.move(str(texdir / f"{out.stem}.pdf"), str(out))
+    for ext in (".aux", ".log", ".out", ".toc"):
+        p = texdir / f"{tex.stem}{ext}"
+        if p.exists():
+            p.unlink()
+    print(f"wrote {where}/{tex.name}  (LaTeX source with its figures; "
+          f"to rebuild the PDF there: {eng} {tex.name}, run twice)")
+
+
 def cmd_export(a):
     tmp, root = materialise(a.ref)
     try:
         project = load_project(root)
-        es = entries(root / "log")
+        es = entries(root / "log", a.ref or "HEAD")
         use_git = (ROOT / ".git").exists()
         title = f"Development log: Project {project.get('project', '?')}"
         if project.get("title"):
@@ -938,39 +1107,29 @@ def cmd_export(a):
             text = re.sub(r"\$`(.+?)`\$", r"$\1$", text)   # GitHub-only $`...`$ syntax
             if a.format == "pdf":
                 text = pdf_tweaks(text)
+                # invisible marker, used to name the entry if LaTeX fails
+                text = f"```{{=latex}}\n% LOGTOOL-ENTRY {e.name}\n```\n\n" + text
             parts.append(text.strip() + "\n\n\\newpage\n" if a.format == "pdf" else text.strip() + "\n\n---\n")
         md = "\n\n".join(parts)
         logdir = root / "log"
-        src = tmp / "combined.md"
-        src.write_text(md, encoding="utf-8")
         out = Path(a.output or f"log_{(a.ref or 'current').replace('/', '_')}.{a.format}").resolve()
         if a.format == "md":
-            shutil.copy(src, out)
+            out.write_text(md, encoding="utf-8")
+        elif not shutil.which("pandoc"):
+            sys.exit("pandoc not found: install it from https://pandoc.org or use --format md")
+        elif a.format == "pdf":
+            build_pdf(md, logdir, out, es)
         else:
-            if not shutil.which("pandoc"):
-                sys.exit("pandoc not found: install it from https://pandoc.org or use --format md")
-            cmd = ["pandoc", str(src), "-o", str(out), "--toc", "--toc-depth=1",
-                   f"--resource-path={logdir}", "-f", "markdown-implicit_figures"]
-            if a.format == "html":
-                cmd += ["--standalone", "--embed-resources", "--mathml",
-                        "--metadata", "title=" + title]
-            else:
-                eng = next((x for x in ("xelatex", "lualatex", "pdflatex") if shutil.which(x)), None)
-                if not eng:
-                    sys.exit("no LaTeX engine found: use --format html instead")
-                cmd += [f"--pdf-engine={eng}", "-V", "geometry:margin=2.2cm",
-                        "-V", "header-includes=\\usepackage{xurl}",
-                        "-V", "colorlinks=true", "-V", "fontsize=11pt"]
-            r = subprocess.run(cmd, cwd=logdir, capture_output=True, text=True)
-            if r.returncode != 0 and "lmodern.sty" in r.stderr and eng != "pdflatex":
-                # TeX installation without the lmodern package: use the OpenType fonts
-                r = subprocess.run(cmd + ["-V", "fontfamily=fontspec",
-                                          "-V", "mainfont=Latin Modern Roman",
-                                          "-V", "mathfont=Latin Modern Math"],
-                                   cwd=logdir, capture_output=True, text=True)
+            src = tmp / "combined.md"
+            src.write_text(md, encoding="utf-8")
+            r = subprocess.run(["pandoc", str(src), "-o", str(out), "--toc", "--toc-depth=1",
+                                f"--resource-path={logdir}", "-f", "markdown-implicit_figures",
+                                "--standalone", "--embed-resources", "--mathml",
+                                "--metadata", "title=" + title],
+                               cwd=logdir, capture_output=True, text=True)
             if r.returncode != 0:
                 sys.exit("pandoc failed:\n" + r.stderr)
-        print(f"wrote {out}")
+        print(f"wrote {shown(out)}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1072,7 +1231,7 @@ def main():
     x.add_argument("name")
     x.set_defaults(func=cmd_experiment)
     f = sp.add_parser("figinfo", help="provenance of the figures of an entry")
-    f.add_argument("items", nargs="+", help="entry file (or its name) or image files")
+    f.add_argument("items", nargs="+", help="entry (file name or part of it, e.g. antithetic) or image files")
     f.set_defaults(func=cmd_figinfo)
     v = sp.add_parser("save", help="freeze figures, check, commit everything and push")
     v.add_argument("-m", "--message", help="commit message (default: from the entry titles)")

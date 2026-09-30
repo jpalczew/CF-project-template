@@ -99,7 +99,8 @@ GitHub quirks: no space right after the opening `$` or before the closing
 `\lbrace ... \rbrace`; if `_` or `*` upsets a formula use `` $`x_1^*`$ ``;
 `\newcommand` does not carry over between formulas.
 
-**Tables.** Paste the Markdown table printed by your experiment script:
+**Tables.** Copy the Markdown table written by your experiment script: `ex.save_table(rows, "prices")`
+writes `output/<config>/prices.md` next to `prices.csv` (and prints the table):
 
 ```markdown
 | basis | degree | price | se |

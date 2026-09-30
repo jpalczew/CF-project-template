@@ -11,6 +11,7 @@ Where things go (so that different scripts and configurations never
 overwrite each other):
 
     tables        experiments/<name>/output/<tag>/<table>.csv    ex.save_table(rows, "table")
+                  experiments/<name>/output/<tag>/<table>.md     (same table in Markdown, for the log)
     other files   experiments/<name>/output/<tag>/<file>         ex.path("file.npz")
     figures       log/figs/<name>-<tag>[-suffix].png              ex.save_figure(fig)
 
@@ -156,8 +157,11 @@ class Experiment:
 
     # ------------------------------------------------------------------ tables
     def save_table(self, rows, name, fmt=None, show=True):
-        """Write rows (a list of dicts) to output/<tag>/<name>.csv and print them as a
-        Markdown table, ready to paste into the log."""
+        """Write rows (a list of dicts) to two files in output/<tag>/:
+        <name>.csv  the numbers at full precision, for further processing;
+        <name>.md   the same table in Markdown, formatted with fmt, ready to copy
+                    into a log entry.
+        With show=True the Markdown table is also printed."""
         if not rows:
             return None
         f = self.out / f"{name}.csv"
@@ -165,11 +169,15 @@ class Experiment:
             w = csv.DictWriter(fh, fieldnames=list(rows[0]))
             w.writeheader()
             w.writerows(rows)
+        table = md_table(rows, fmt=fmt)
+        md = self.out / f"{name}.md"
+        md.write_text(table + "\n", encoding="utf-8")
         if show:
             print()
-            print(md_table(rows, fmt=fmt))
+            print(table)
             print()
         print(f"saved {self.rel(f)}")
+        print(f"saved {self.rel(md)}  (Markdown table, ready to copy into the log)")
         return f
 
     # ------------------------------------------------------------------ figures
