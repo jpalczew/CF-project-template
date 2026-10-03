@@ -119,14 +119,21 @@ PROJECTS = {
         "D. Bartl, S. Eckstein (2026). Optimal nonparametric estimation of the expected shortfall "
         "risk. SIAM J. Financial Math. 17(3), 691-727."),
     6: ("Quant GANs for intraday data",
-        "M. Wiese, R. Knobloch, R. Korn, P. Kremsner (2020). Quant GANs: Deep generation of "
+        "M. Wiese, R. Knobloch, R. Korn, P. Kretschmer (2020). Quant GANs: Deep generation of "
         "financial time series. Quantitative Finance 20(9), 1419-1440."),
-    7: ("Diffusion models for synthetic financial time series",
+    7: ("Diffusion models for rare-event dependence",
         "T. Takahashi, T. Mizuno (2025). Generation of synthetic financial time series by "
         "diffusion models. Quantitative Finance 25(10), 1507-1516."),
     8: ("Deep RL for market-maker inventory management",
         "O. F. Vicente, F. Fernandez, J. Garcia (2023). Automated market maker inventory "
         "management with deep reinforcement learning. Applied Intelligence 53, 22249-22266."),
+    9: ("Deep kernel hedging with random features",
+        "J.-L. Dupret, D. Hainaut, E. Motte (2026). Deep kernel hedging. "
+        "arXiv:2609.34474."),
+    10: ("Optimised multilevel Monte Carlo for nested simulation",
+         "A. Boumezoued, A. Cherchali, V. Lemaire, G. Pages, M. Truc (2025). Optimized multi-level "
+         "Monte Carlo parametrization and antithetic sampling for nested simulations. "
+         "Methodol. Comput. Appl. Probab. 28(3)."),
 }
 
 
